@@ -12,26 +12,44 @@ import (
 
 // Keys contains every configurable ducky action.
 type Keys struct {
-	Up         string `toml:"up"`
-	Down       string `toml:"down"`
-	TabNext    string `toml:"tab_next"`
-	TabPrev    string `toml:"tab_prev"`
-	Start      string `toml:"start"`
-	Stop       string `toml:"stop"`
-	Remove     string `toml:"remove"`
-	Inspect    string `toml:"inspect"`
-	Logs       string `toml:"logs"`
-	New        string `toml:"new"`
-	Edit       string `toml:"edit"`
-	OpenConfig string `toml:"open_config"`
-	Quit       string `toml:"quit"`
-	ScrollUp   string `toml:"scroll_up"`
-	ScrollDown string `toml:"scroll_down"`
+	Up          string `toml:"up"`
+	Down        string `toml:"down"`
+	TabNext     string `toml:"tab_next"`
+	TabPrev     string `toml:"tab_prev"`
+	Start       string `toml:"start"`
+	Stop        string `toml:"stop"`
+	Remove      string `toml:"remove"`
+	Inspect     string `toml:"inspect"`
+	Logs        string `toml:"logs"`
+	New         string `toml:"new"`
+	Edit        string `toml:"edit"`
+	OpenConfig  string `toml:"open_config"`
+	Quit        string `toml:"quit"`
+	ScrollUp    string `toml:"scroll_up"`
+	ScrollDown  string `toml:"scroll_down"`
+	Search      string `toml:"search"`
+	ClearSearch string `toml:"clear_search"`
+	Confirm     string `toml:"confirm"`
+	Back        string `toml:"back"`
+	PageUp      string `toml:"page_up"`
+	PageDown    string `toml:"page_down"`
+	Refresh     string `toml:"refresh"`
+	OpenPreview string `toml:"open_preview"`
+	Setup       string `toml:"setup"`
+	Run         string `toml:"run"`
 }
 
 // Config is ducky's persisted configuration.
 type Config struct {
-	Keys Keys `toml:"keys"`
+	Keys    Keys    `toml:"keys"`
+	Updates Updates `toml:"updates"`
+}
+
+// Updates controls the asynchronous startup update check.
+type Updates struct {
+	DisableChecks bool   `toml:"disable_checks"`
+	CurrentCommit string `toml:"current_commit"`
+	Repository    string `toml:"repository"`
 }
 
 // Default returns ducky's default configuration.
@@ -41,7 +59,10 @@ func Default() Config {
 		Start: "s", Stop: "x", Remove: "d", Inspect: "enter", Logs: "g",
 		New: "n", Edit: "e", OpenConfig: "o", Quit: "q",
 		ScrollUp: "ctrl+u", ScrollDown: "ctrl+d",
-	}}
+		Search: "/", ClearSearch: "esc", Confirm: "enter", Back: "esc",
+		PageUp: "pgup", PageDown: "pgdown", Refresh: "r", OpenPreview: "E", Setup: "S",
+		Run: "R",
+	}, Updates: Updates{Repository: "https://github.com/wingitman/ducky"}}
 }
 
 // Path returns the platform-appropriate ducky config path.
@@ -138,12 +159,46 @@ func applyDefaults(cfg *Config) {
 	if cfg.Keys.ScrollDown == "" {
 		cfg.Keys.ScrollDown = d.ScrollDown
 	}
+	if cfg.Keys.Search == "" {
+		cfg.Keys.Search = d.Search
+	}
+	if cfg.Keys.ClearSearch == "" {
+		cfg.Keys.ClearSearch = d.ClearSearch
+	}
+	if cfg.Keys.Confirm == "" {
+		cfg.Keys.Confirm = d.Confirm
+	}
+	if cfg.Keys.Back == "" {
+		cfg.Keys.Back = d.Back
+	}
+	if cfg.Keys.PageUp == "" {
+		cfg.Keys.PageUp = d.PageUp
+	}
+	if cfg.Keys.PageDown == "" {
+		cfg.Keys.PageDown = d.PageDown
+	}
+	if cfg.Keys.Refresh == "" {
+		cfg.Keys.Refresh = d.Refresh
+	}
+	if cfg.Keys.OpenPreview == "" {
+		cfg.Keys.OpenPreview = d.OpenPreview
+	}
+	if cfg.Keys.Setup == "" {
+		cfg.Keys.Setup = d.Setup
+	}
+	if cfg.Keys.Run == "" {
+		cfg.Keys.Run = d.Run
+	}
+	if cfg.Updates.Repository == "" {
+		cfg.Updates.Repository = Default().Updates.Repository
+	}
 }
 
 func render(cfg Config) string {
 	k := cfg.Keys
+	u := cfg.Updates
 	return "# ducky configuration file\n# Key values use Bubble Tea names such as up, enter, ctrl+u, or single letters.\n\n[keys]\n" +
-		fmt.Sprintf("up = %q\ndown = %q\ntab_next = %q\ntab_prev = %q\nstart = %q\nstop = %q\nremove = %q\ninspect = %q\nlogs = %q\nnew = %q\nedit = %q\nopen_config = %q\nquit = %q\nscroll_up = %q\nscroll_down = %q\n", k.Up, k.Down, k.TabNext, k.TabPrev, k.Start, k.Stop, k.Remove, k.Inspect, k.Logs, k.New, k.Edit, k.OpenConfig, k.Quit, k.ScrollUp, k.ScrollDown)
+		fmt.Sprintf("up = %q\ndown = %q\ntab_next = %q\ntab_prev = %q\nstart = %q\nstop = %q\nremove = %q\ninspect = %q\nlogs = %q\nnew = %q\nedit = %q\nopen_config = %q\nquit = %q\nscroll_up = %q\nscroll_down = %q\nsearch = %q\nclear_search = %q\nconfirm = %q\nback = %q\npage_up = %q\npage_down = %q\nrefresh = %q\nopen_preview = %q\nsetup = %q\nrun = %q\n\n[updates]\ndisable_checks = %t\ncurrent_commit = %q\nrepository = %q\n", k.Up, k.Down, k.TabNext, k.TabPrev, k.Start, k.Stop, k.Remove, k.Inspect, k.Logs, k.New, k.Edit, k.OpenConfig, k.Quit, k.ScrollUp, k.ScrollDown, k.Search, k.ClearSearch, k.Confirm, k.Back, k.PageUp, k.PageDown, k.Refresh, k.OpenPreview, k.Setup, k.Run, u.DisableChecks, u.CurrentCommit, u.Repository)
 }
 
 func errIfUnexpectedStat(err error) error {
@@ -156,7 +211,12 @@ func errIfUnexpectedStat(err error) error {
 func missingKeys(content string, cfg Config) bool {
 	keys := []string{
 		"up", "down", "tab_next", "tab_prev", "start", "stop", "remove",
-		"inspect", "logs", "new", "edit", "open_config", "quit", "scroll_up", "scroll_down",
+		"inspect", "logs", "new", "edit", "open_config", "quit", "scroll_up", "scroll_down", "search", "clear_search", "confirm", "back", "page_up", "page_down", "refresh", "open_preview", "setup", "run",
+	}
+	for _, key := range []string{"disable_checks", "current_commit", "repository"} {
+		if !strings.Contains(content, key+" =") {
+			return true
+		}
 	}
 	for _, key := range keys {
 		if !strings.Contains(content, key+" =") {

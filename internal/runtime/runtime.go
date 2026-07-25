@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -27,12 +28,19 @@ const (
 	Networks
 	Compose
 	Kubernetes
+	Files
 )
 
 // Item is one row in a resource view.
 type Item struct {
 	Name    string
 	Details string
+	Status  string
+	Image   string
+	Ports   string
+	Extra   string
+	Type    string
+	Path    string
 }
 
 // Client runs commands for one container runtime.
@@ -105,7 +113,7 @@ func (c Client) List(ctx context.Context, resource Resource) ([]Item, error) {
 	var args []string
 	switch resource {
 	case Containers:
-		args = []string{"ps", "-a", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"}
+		args = []string{"ps", "-a", "--format", "{{.State}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.RunningFor}}\t{{.Networks}}"}
 	case Images:
 		args = []string{"images", "--format", "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}"}
 	case Volumes:
@@ -116,6 +124,8 @@ func (c Client) List(ctx context.Context, resource Resource) ([]Item, error) {
 		args = []string{"compose", "ls", "--all", "--format", "table {{.Name}}\t{{.Status}}\t{{.ConfigFiles}}"}
 	case Kubernetes:
 		return listKubernetes(ctx)
+	case Files:
+		return nil, errors.New("project files are listed by ducky")
 	default:
 		return nil, fmt.Errorf("unsupported resource %d", resource)
 	}
@@ -123,7 +133,25 @@ func (c Client) List(ctx context.Context, resource Resource) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
+	if resource == Containers {
+		return parseContainerItems(string(output)), nil
+	}
 	return parseItems(string(output)), nil
+}
+
+// RunFile executes the appropriate command for a discovered project file.
+func (c Client) RunFile(ctx context.Context, item Item) (string, error) {
+	switch item.Type {
+	case "compose":
+		return c.Run(ctx, "compose", "-f", item.Path, "up", "-d")
+	case "dockerfile":
+		tag := strings.ToLower(strings.ReplaceAll(item.Name, " ", "-")) + ":ducky"
+		return c.Run(ctx, "build", "-f", item.Path, "-t", tag, filepath.Dir(item.Path))
+	case "kubernetes":
+		return runKubectl(ctx, "apply", "-f", item.Path)
+	default:
+		return "", fmt.Errorf("%s files cannot be run", item.Type)
+	}
 }
 
 // Action performs a safe, common action against the selected resource.
@@ -209,6 +237,32 @@ func parseItems(output string) []Item {
 		if len(parts) == 2 {
 			item.Details = parts[1]
 		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func parseContainerItems(output string) []Item {
+	var items []Item
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 || strings.TrimSpace(fields[1]) == "" {
+			continue
+		}
+		for i := range fields {
+			fields[i] = strings.TrimSpace(fields[i])
+		}
+		item := Item{Status: fields[0], Name: fields[1]}
+		if len(fields) > 2 {
+			item.Image = fields[2]
+		}
+		if len(fields) > 3 {
+			item.Ports = fields[3]
+		}
+		if len(fields) > 4 {
+			item.Extra = strings.Join(fields[4:], " ")
+		}
+		item.Details = strings.Join([]string{item.Image, item.Ports, item.Extra}, " ")
 		items = append(items, item)
 	}
 	return items

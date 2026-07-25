@@ -10,9 +10,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/wingitman/ducky/internal/app"
+	"github.com/wingitman/ducky/internal/buildall"
 	"github.com/wingitman/ducky/internal/config"
 	"github.com/wingitman/ducky/internal/runtime"
 	"github.com/wingitman/ducky/internal/setup"
+	"github.com/wingitman/ducky/internal/version"
 )
 
 func main() {
@@ -26,7 +28,20 @@ func main() {
 
 	flags := flag.NewFlagSet("ducky", flag.ExitOnError)
 	runtimeName := flags.String("runtime", "", "runtime to use: docker or podman")
+	buildAll := flags.Bool("build-all", false, "cross-compile release binaries from the current source directory")
+	showVersion := flags.Bool("version", false, "show ducky version")
 	if err := flags.Parse(os.Args[1:]); err != nil {
+		return
+	}
+	if *showVersion {
+		fmt.Printf("ducky %s\n", version.Current())
+		return
+	}
+	if *buildAll {
+		if err := buildall.Run(context.Background(), ".", os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "ducky: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -65,6 +80,9 @@ func runSetup(args []string) error {
 	}
 	if result.Written {
 		fmt.Fprintf(os.Stdout, "Generated %s for %s (%s).\n", result.Path, result.Project.Name, strings.ToLower(string(result.Project.Kind)))
+		if result.ComposePath != "" {
+			fmt.Fprintf(os.Stdout, "Generated %s for the detected multi-project services.\n", result.ComposePath)
+		}
 	}
 	return nil
 }
