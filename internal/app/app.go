@@ -46,6 +46,9 @@ type model struct {
 	outputViewport viewport.Model
 	prompt         *textinput.Model
 	updateChecking bool
+	runCh          <-chan runtime.RunEvent
+	runCancel      context.CancelFunc
+	running        bool
 }
 
 type loadedMsg struct {
@@ -54,9 +57,15 @@ type loadedMsg struct {
 }
 
 type actionMsg struct {
-	output string
-	err    error
-	kind   string
+	output       string
+	err          error
+	kind         string
+	reload       bool
+	focusPreview bool
+}
+
+type runEventMsg struct {
+	event runtime.RunEvent
 }
 
 type configReloadedMsg struct {
@@ -108,17 +117,44 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case actionMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.status = msg.err.Error()
+			m.setOutput(msg.err.Error(), msg.kind)
+			m.status = "command failed"
 		} else {
-			m.output = strings.TrimSpace(msg.output)
-			m.previewFocus = true
-			m.previewKind = msg.kind
-			m.outputViewport.SetContent(m.output)
-			m.outputViewport.GotoTop()
-			m.resize()
+			output := strings.TrimSpace(msg.output)
+			if output == "" {
+				output = "command completed successfully"
+			}
+			m.setOutput(output, msg.kind)
 			m.status = "command completed"
 		}
-		return m, m.load()
+		if msg.focusPreview {
+			m.previewFocus = true
+		}
+		if msg.reload && msg.err == nil {
+			return m, m.load()
+		}
+		return m, nil
+	case runEventMsg:
+		if msg.event.Command != "" {
+			m.setOutput(msg.event.Command, "text")
+		}
+		if msg.event.Output != "" {
+			m.appendOutput(msg.event.Output)
+		}
+		if msg.event.Done {
+			m.running = false
+			m.loading = false
+			m.runCh = nil
+			m.runCancel = nil
+			if msg.event.Err != nil {
+				m.appendOutput(msg.event.Err.Error())
+				m.status = "command failed"
+				return m, nil
+			}
+			m.status = "command completed"
+			return m, m.load()
+		}
+		return m, waitForRunEvent(m.runCh)
 	case createMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -158,6 +194,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.running {
+		if matches(msg, m.cfg.Keys.Back) {
+			if m.runCancel != nil {
+				m.runCancel()
+			}
+			m.status = "cancelling command"
+		}
+		return m, nil
+	}
 	switch {
 	case matches(msg, m.cfg.Keys.Back) && m.previewFocus:
 		m.previewFocus = false
@@ -212,7 +257,7 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case matches(msg, m.cfg.Keys.Setup):
 		return m, openSetup()
 	case matches(msg, m.cfg.Keys.Run) && runtime.Resource(m.tab) == runtime.Files:
-		return m, m.runFile()
+		return m.startFileRun()
 	case matches(msg, m.cfg.Keys.Edit) && runtime.Resource(m.tab) == runtime.Compose:
 		return m, openComposeFile()
 	}
@@ -251,7 +296,7 @@ func (m model) action(action string) tea.Cmd {
 		if action == "inspect" {
 			kind = "json"
 		}
-		return actionMsg{output: output, err: err, kind: kind}
+		return actionMsg{output: output, err: err, kind: kind, reload: true, focusPreview: action == "inspect"}
 	}
 }
 
@@ -262,7 +307,7 @@ func (m model) logs() tea.Cmd {
 	name := m.items[m.cursor].Name
 	return func() tea.Msg {
 		output, err := m.client.Logs(context.Background(), runtime.Resource(m.tab), name)
-		return actionMsg{output: output, err: err, kind: "log"}
+		return actionMsg{output: output, err: err, kind: "log", reload: true}
 	}
 }
 
@@ -280,7 +325,7 @@ func (m model) previewFile() tea.Cmd {
 	}
 	return func() tea.Msg {
 		content, err := os.ReadFile(item.Path)
-		return actionMsg{output: string(content), err: err, kind: "text"}
+		return actionMsg{output: string(content), err: err, kind: "text", focusPreview: true}
 	}
 }
 
@@ -292,14 +337,34 @@ func (m model) openSelectedFile() tea.Cmd {
 	return openFileInEditor(item.Path)
 }
 
-func (m model) runFile() tea.Cmd {
+func (m model) startFileRun() (tea.Model, tea.Cmd) {
 	item, ok := m.selectedFile()
 	if !ok {
-		return nil
+		return m, nil
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	ch, err := m.client.StartFile(ctx, item)
+	if err != nil {
+		cancel()
+		return m, func() tea.Msg { return actionMsg{err: err, kind: "text"} }
+	}
+	m.runCh = ch
+	m.runCancel = cancel
+	m.running = true
+	m.loading = true
+	m.status = "running selected file"
+	m.output = ""
+	m.previewFocus = true
+	return m, waitForRunEvent(ch)
+}
+
+func waitForRunEvent(events <-chan runtime.RunEvent) tea.Cmd {
 	return func() tea.Msg {
-		output, err := m.client.RunFile(context.Background(), item)
-		return actionMsg{output: output, err: err, kind: "text"}
+		event, ok := <-events
+		if !ok {
+			return runEventMsg{event: runtime.RunEvent{Done: true}}
+		}
+		return runEventMsg{event: event}
 	}
 }
 
@@ -543,6 +608,29 @@ func (m *model) resize() {
 	m.outputViewport.SetHeight(max(1, outputBoxHeight-2))
 }
 
+func (m *model) setOutput(output, kind string) {
+	m.output = strings.TrimSpace(output)
+	m.previewKind = kind
+	m.outputViewport.SetContent(m.output)
+	m.outputViewport.GotoTop()
+	m.resize()
+}
+
+func (m *model) appendOutput(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if m.output == "" {
+		m.setOutput(line, "text")
+		return
+	}
+	m.output += "\n" + line
+	m.outputViewport.SetContent(m.output)
+	m.outputViewport.GotoBottom()
+	m.resize()
+}
+
 func (m model) layoutHeights() (listBoxHeight, outputBoxHeight, promptBoxHeight int) {
 	const (
 		headerHeight  = 1
@@ -752,7 +840,19 @@ func openComposeFile() tea.Cmd {
 }
 
 func matches(msg tea.KeyPressMsg, binding string) bool {
-	return binding != "" && msg.String() == binding
+	if binding == "" {
+		return false
+	}
+	actual := msg.String()
+	if actual == binding {
+		return true
+	}
+	// Bubble Tea may report an uppercase printable binding as shift+<letter>
+	// depending on the terminal keyboard protocol in use.
+	if len([]rune(binding)) == 1 && binding >= "A" && binding <= "Z" {
+		return actual == "shift+"+strings.ToLower(binding)
+	}
+	return false
 }
 
 func fit(text string, width int) string {

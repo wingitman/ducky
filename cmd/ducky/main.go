@@ -83,6 +83,9 @@ func runSetup(args []string) error {
 		if result.ComposePath != "" {
 			fmt.Fprintf(os.Stdout, "Generated %s for the detected multi-project services.\n", result.ComposePath)
 		}
+		if result.IgnorePath != "" {
+			fmt.Fprintf(os.Stdout, "Generated %s to reduce Docker build context size.\n", result.IgnorePath)
+		}
 	}
 	return nil
 }

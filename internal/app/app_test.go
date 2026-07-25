@@ -1,10 +1,12 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/wingitman/ducky/internal/config"
 	"github.com/wingitman/ducky/internal/runtime"
@@ -77,5 +79,50 @@ func TestMatchesFilterByFieldAndText(t *testing.T) {
 	}
 	if !matchesFilter(item, "chillblast") {
 		t.Fatal("expected free-text filter to match")
+	}
+}
+
+func TestMatchesUppercaseBindingAcrossKeyboardProtocols(t *testing.T) {
+	if !matches(tea.KeyPressMsg{Text: "R", Code: 'r'}, "R") {
+		t.Fatal("expected printable uppercase key to match")
+	}
+	if !matches(tea.KeyPressMsg{Text: "shift+r", Code: 'r'}, "R") {
+		t.Fatal("expected shifted key representation to match")
+	}
+	if matches(tea.KeyPressMsg{Text: "r", Code: 'r'}, "R") {
+		t.Fatal("lowercase refresh key must not match uppercase run binding")
+	}
+}
+
+func TestActionErrorsRemainVisible(t *testing.T) {
+	m := model{cfg: config.Default(), outputViewport: viewport.New(), width: 80, height: 20}
+	updated, cmd := m.Update(actionMsg{err: errors.New("compose is unavailable"), kind: "text", reload: true})
+	if cmd != nil {
+		t.Fatal("failed action unexpectedly scheduled a reload")
+	}
+	result := updated.(model)
+	if result.status != "command failed" || !strings.Contains(result.output, "compose is unavailable") {
+		t.Fatalf("failed action feedback = status %q, output %q", result.status, result.output)
+	}
+}
+
+func TestEmptyActionOutputRemainsVisible(t *testing.T) {
+	m := model{cfg: config.Default(), outputViewport: viewport.New(), width: 80, height: 20}
+	updated, _ := m.Update(actionMsg{kind: "text", focusPreview: true})
+	result := updated.(model)
+	if result.output == "" || !result.previewFocus {
+		t.Fatalf("empty action feedback = output %q, previewFocus %v", result.output, result.previewFocus)
+	}
+}
+
+func TestNonPreviewActionDoesNotStealFocus(t *testing.T) {
+	m := model{cfg: config.Default(), outputViewport: viewport.New(), width: 80, height: 20}
+	updated, _ := m.Update(actionMsg{output: "container stopped", kind: "text", reload: true})
+	result := updated.(model)
+	if result.output != "container stopped" {
+		t.Fatalf("action output = %q", result.output)
+	}
+	if result.previewFocus {
+		t.Fatal("non-preview action moved focus to the preview")
 	}
 }

@@ -64,3 +64,11 @@ func TestDetectsNestedMultiProjectRepository(t *testing.T) {
 		t.Fatalf("multi-project Dockerfile missing stages/comments: %s", content)
 	}
 }
+
+func TestDockerignoreExcludesBuildArtifacts(t *testing.T) {
+	for _, entry := range []string{".git", "**/node_modules", "**/bin", "**/obj", "**/dist"} {
+		if !strings.Contains(dockerignore, entry) {
+			t.Fatalf("dockerignore does not exclude %q: %s", entry, dockerignore)
+		}
+	}
+}

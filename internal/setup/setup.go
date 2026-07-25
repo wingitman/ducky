@@ -54,6 +54,7 @@ type Result struct {
 	Project     Project
 	Path        string
 	ComposePath string
+	IgnorePath  string
 	Written     bool
 }
 
@@ -109,7 +110,13 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, options Options) (Res
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return Result{}, fmt.Errorf("write Dockerfile: %w", err)
 	}
-	result := Result{Project: project, Path: path, Written: true}
+	ignorePath := filepath.Join(directory, ".dockerignore")
+	if _, statErr := os.Stat(ignorePath); statErr != nil || options.Force {
+		if err := os.WriteFile(ignorePath, []byte(dockerignore), 0o644); err != nil {
+			return Result{}, fmt.Errorf("write .dockerignore: %w", err)
+		}
+	}
+	result := Result{Project: project, Path: path, IgnorePath: ignorePath, Written: true}
 	if len(project.Projects) > 1 {
 		compose, composeErr := multiCompose(project)
 		if composeErr != nil {
@@ -122,6 +129,23 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, options Options) (Res
 	}
 	return result, nil
 }
+
+const dockerignore = `# Keep source-control metadata and local tooling out of Docker build contexts.
+.git
+.gitignore
+.idea
+.vscode
+
+# Exclude generated and dependency-heavy directories.
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/build
+**/target
+coverage
+*.log
+`
 
 // Detect identifies a project from files in directory.
 func Detect(directory string) (Project, error) {

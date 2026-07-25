@@ -2,9 +2,11 @@
 package runtime
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -47,6 +49,14 @@ type Item struct {
 type Client struct {
 	Kind Kind
 	Bin  string
+}
+
+// RunEvent is one streamed update from a project-file command.
+type RunEvent struct {
+	Command string
+	Output  string
+	Done    bool
+	Err     error
 }
 
 // Create performs the common create/pull/apply operation for a resource.
@@ -141,17 +151,71 @@ func (c Client) List(ctx context.Context, resource Resource) ([]Item, error) {
 
 // RunFile executes the appropriate command for a discovered project file.
 func (c Client) RunFile(ctx context.Context, item Item) (string, error) {
+	events, err := c.StartFile(ctx, item)
+	if err != nil {
+		return "", err
+	}
+	var output []string
+	for event := range events {
+		if event.Output != "" {
+			output = append(output, event.Output)
+		}
+		if event.Done {
+			return strings.Join(output, "\n"), event.Err
+		}
+	}
+	return strings.Join(output, "\n"), nil
+}
+
+// StartFile starts a project-file command and streams its output.
+func (c Client) StartFile(ctx context.Context, item Item) (<-chan RunEvent, error) {
+	bin, args, err := c.fileCommand(item)
+	if err != nil {
+		return nil, err
+	}
+	command := exec.CommandContext(ctx, bin, args...)
+	reader, writer := io.Pipe()
+	command.Stdout = writer
+	command.Stderr = writer
+	if err := command.Start(); err != nil {
+		return nil, fmt.Errorf("%s: %w", commandLine(bin, args), err)
+	}
+	events := make(chan RunEvent, 32)
+	events <- RunEvent{Command: commandLine(bin, args)}
+	go func() {
+		readDone := make(chan struct{})
+		go func() {
+			scanner := bufio.NewScanner(reader)
+			for scanner.Scan() {
+				events <- RunEvent{Output: scanner.Text()}
+			}
+			close(readDone)
+		}()
+		waitErr := command.Wait()
+		_ = writer.Close()
+		<-readDone
+		events <- RunEvent{Done: true, Err: waitErr}
+		close(events)
+	}()
+	return events, nil
+}
+
+func (c Client) fileCommand(item Item) (string, []string, error) {
 	switch item.Type {
 	case "compose":
-		return c.Run(ctx, "compose", "-f", item.Path, "up", "-d")
+		return c.Bin, []string{"compose", "-f", item.Path, "up", "-d"}, nil
 	case "dockerfile":
 		tag := strings.ToLower(strings.ReplaceAll(item.Name, " ", "-")) + ":ducky"
-		return c.Run(ctx, "build", "-f", item.Path, "-t", tag, filepath.Dir(item.Path))
+		return c.Bin, []string{"build", "-f", item.Path, "-t", tag, filepath.Dir(item.Path)}, nil
 	case "kubernetes":
-		return runKubectl(ctx, "apply", "-f", item.Path)
+		return "kubectl", []string{"apply", "-f", item.Path}, nil
 	default:
-		return "", fmt.Errorf("%s files cannot be run", item.Type)
+		return "", nil, fmt.Errorf("%s files cannot be run", item.Type)
 	}
+}
+
+func commandLine(bin string, args []string) string {
+	return strings.Join(append([]string{bin}, args...), " ")
 }
 
 // Action performs a safe, common action against the selected resource.
