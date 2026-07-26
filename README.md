@@ -119,3 +119,12 @@ the file type supports execution.
 ## Kubernetes
 
 The Kubernetes view requires `kubectl` and uses the current kubeconfig context. Docker Desktop Kubernetes, kind, minikube, Podman-based clusters, and remote clusters are supported where the configured context exposes them.
+
+## Support
+<a href='https://ko-fi.com/W7W21WP5L7' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://storage.ko-fi.com/cdn/kofi4.png?v=6' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Copyright (c) 2026 [delbysoft](https://github.com/wingitman)
