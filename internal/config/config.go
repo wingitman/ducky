@@ -37,12 +37,14 @@ type Keys struct {
 	OpenPreview string `toml:"open_preview"`
 	Setup       string `toml:"setup"`
 	Run         string `toml:"run"`
+	Theme       string `toml:"theme"`
 }
 
 // Config is ducky's persisted configuration.
 type Config struct {
 	Keys    Keys    `toml:"keys"`
 	Updates Updates `toml:"updates"`
+	Themes  Themes  `toml:"themes"`
 }
 
 // Updates controls the asynchronous startup update check.
@@ -61,8 +63,11 @@ func Default() Config {
 		ScrollUp: "ctrl+u", ScrollDown: "ctrl+d",
 		Search: "/", ClearSearch: "esc", Confirm: "enter", Back: "esc",
 		PageUp: "pgup", PageDown: "pgdown", Refresh: "r", OpenPreview: "E", Setup: "S",
-		Run: "R",
-	}, Updates: Updates{Repository: "https://github.com/wingitman/ducky"}}
+		Run: "R", Theme: "T",
+	}, Updates: Updates{Repository: "https://github.com/wingitman/ducky"}, Themes: Themes{
+		ThemeName: "terminal",
+		ThemeFile: defaultThemeFile(),
+	}}
 }
 
 // Path returns the platform-appropriate ducky config path.
@@ -85,6 +90,7 @@ func Load() (Config, error) {
 		if err := Save(cfg); err != nil {
 			return cfg, err
 		}
+		_ = EnsureThemesFile(cfg)
 		return cfg, nil
 	}
 	if err := errIfUnexpectedStat(err); err != nil {
@@ -97,6 +103,7 @@ func Load() (Config, error) {
 	if data, readErr := os.ReadFile(path); readErr == nil && missingKeys(string(data), cfg) {
 		_ = Save(cfg)
 	}
+	_ = EnsureThemesFile(cfg)
 	return cfg, nil
 }
 
@@ -189,8 +196,17 @@ func applyDefaults(cfg *Config) {
 	if cfg.Keys.Run == "" {
 		cfg.Keys.Run = d.Run
 	}
+	if cfg.Keys.Theme == "" {
+		cfg.Keys.Theme = d.Theme
+	}
 	if cfg.Updates.Repository == "" {
 		cfg.Updates.Repository = Default().Updates.Repository
+	}
+	if cfg.Themes.ThemeName == "" {
+		cfg.Themes.ThemeName = Default().Themes.ThemeName
+	}
+	if cfg.Themes.ThemeFile == "" {
+		cfg.Themes.ThemeFile = Default().Themes.ThemeFile
 	}
 }
 
@@ -198,7 +214,7 @@ func render(cfg Config) string {
 	k := cfg.Keys
 	u := cfg.Updates
 	return "# ducky configuration file\n# Key values use Bubble Tea names such as up, enter, ctrl+u, or single letters.\n\n[keys]\n" +
-		fmt.Sprintf("up = %q\ndown = %q\ntab_next = %q\ntab_prev = %q\nstart = %q\nstop = %q\nremove = %q\ninspect = %q\nlogs = %q\nnew = %q\nedit = %q\nopen_config = %q\nquit = %q\nscroll_up = %q\nscroll_down = %q\nsearch = %q\nclear_search = %q\nconfirm = %q\nback = %q\npage_up = %q\npage_down = %q\nrefresh = %q\nopen_preview = %q\nsetup = %q\nrun = %q\n\n[updates]\ndisable_checks = %t\ncurrent_commit = %q\nrepository = %q\n", k.Up, k.Down, k.TabNext, k.TabPrev, k.Start, k.Stop, k.Remove, k.Inspect, k.Logs, k.New, k.Edit, k.OpenConfig, k.Quit, k.ScrollUp, k.ScrollDown, k.Search, k.ClearSearch, k.Confirm, k.Back, k.PageUp, k.PageDown, k.Refresh, k.OpenPreview, k.Setup, k.Run, u.DisableChecks, u.CurrentCommit, u.Repository)
+		fmt.Sprintf("up = %q\ndown = %q\ntab_next = %q\ntab_prev = %q\nstart = %q\nstop = %q\nremove = %q\ninspect = %q\nlogs = %q\nnew = %q\nedit = %q\nopen_config = %q\nquit = %q\nscroll_up = %q\nscroll_down = %q\nsearch = %q\nclear_search = %q\nconfirm = %q\nback = %q\npage_up = %q\npage_down = %q\nrefresh = %q\nopen_preview = %q\nsetup = %q\nrun = %q\ntheme = %q\n\n[updates]\ndisable_checks = %t\ncurrent_commit = %q\nrepository = %q\n\n[themes]\ntheme_name = %q\ntheme_file = %q\n# Optional overrides applied after the selected theme.\n# primary = \"#7C9EF0\"\n# accent = \"#F0A47C\"\n# muted = \"#666688\"\n# error = \"#F07C7C\"\n# success = \"#7CF09C\"\n# border = \"#444466\"\n# selected_background = \"#2A2A4A\"\n# selected_foreground = \"#EEEEFF\"\n", k.Up, k.Down, k.TabNext, k.TabPrev, k.Start, k.Stop, k.Remove, k.Inspect, k.Logs, k.New, k.Edit, k.OpenConfig, k.Quit, k.ScrollUp, k.ScrollDown, k.Search, k.ClearSearch, k.Confirm, k.Back, k.PageUp, k.PageDown, k.Refresh, k.OpenPreview, k.Setup, k.Run, k.Theme, u.DisableChecks, u.CurrentCommit, u.Repository, cfg.Themes.ThemeName, cfg.Themes.ThemeFile)
 }
 
 func errIfUnexpectedStat(err error) error {
@@ -211,9 +227,9 @@ func errIfUnexpectedStat(err error) error {
 func missingKeys(content string, cfg Config) bool {
 	keys := []string{
 		"up", "down", "tab_next", "tab_prev", "start", "stop", "remove",
-		"inspect", "logs", "new", "edit", "open_config", "quit", "scroll_up", "scroll_down", "search", "clear_search", "confirm", "back", "page_up", "page_down", "refresh", "open_preview", "setup", "run",
+		"inspect", "logs", "new", "edit", "open_config", "quit", "scroll_up", "scroll_down", "search", "clear_search", "confirm", "back", "page_up", "page_down", "refresh", "open_preview", "setup", "run", "theme",
 	}
-	for _, key := range []string{"disable_checks", "current_commit", "repository"} {
+	for _, key := range []string{"disable_checks", "current_commit", "repository", "theme_name", "theme_file"} {
 		if !strings.Contains(content, key+" =") {
 			return true
 		}

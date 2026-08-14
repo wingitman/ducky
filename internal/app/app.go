@@ -49,6 +49,10 @@ type model struct {
 	runCh          <-chan runtime.RunEvent
 	runCancel      context.CancelFunc
 	running        bool
+
+	themeMode   bool
+	themeCursor int
+	themeNames  []string
 }
 
 type loadedMsg struct {
@@ -84,10 +88,12 @@ type createMsg struct {
 
 // New creates the root application model.
 func New(client runtime.Client, cfg config.Config) tea.Model {
+	applyTheme(cfg)
 	filterInput := textinput.New()
 	filterInput.Placeholder = "filter: status:running image:postgres name:db"
 	filterInput.CharLimit = 256
-	return model{client: client, cfg: cfg, loading: true, updateChecking: true, outputViewport: viewport.New(), filterInput: filterInput}
+	themeNames, _ := config.ThemeNames(cfg)
+	return model{client: client, cfg: cfg, loading: true, updateChecking: true, outputViewport: viewport.New(), filterInput: filterInput, themeNames: themeNames}
 }
 
 func (m model) Init() tea.Cmd {
@@ -174,10 +180,15 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = msg.err.Error()
 		} else {
 			m.cfg = msg.cfg
+			applyTheme(msg.cfg)
+			m.themeNames, _ = config.ThemeNames(msg.cfg)
 			m.status = "config reloaded"
 		}
 		return m, nil
 	case tea.KeyPressMsg:
+		if m.themeMode {
+			return m.updateTheme(msg)
+		}
 		if m.prompt != nil {
 			return m.updatePrompt(msg)
 		}
@@ -189,6 +200,61 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.updateKey(msg)
+	}
+	return m, nil
+}
+
+func applyTheme(cfg config.Config) {
+	theme := config.ResolveTheme(cfg)
+	ui.ConfigureTheme(theme.Colors, theme.Terminal)
+}
+
+func (m model) applySelectedTheme() (tea.Model, tea.Cmd) {
+	if m.themeCursor < 0 || m.themeCursor >= len(m.themeNames) {
+		m.themeMode = false
+		return m, nil
+	}
+	name := m.themeNames[m.themeCursor]
+	if err := config.SetThemeName(name); err != nil {
+		m.status = "Could not save theme: " + err.Error()
+		m.themeMode = false
+		return m, nil
+	}
+	m.cfg.Themes.ThemeName = name
+	applyTheme(m.cfg)
+	m.themeMode = false
+	m.status = "theme: " + name
+	return m, nil
+}
+
+func (m *model) clampThemeCursor() {
+	if len(m.themeNames) == 0 {
+		m.themeCursor = 0
+		return
+	}
+	if m.themeCursor < 0 {
+		m.themeCursor = 0
+	}
+	if m.themeCursor >= len(m.themeNames) {
+		m.themeCursor = len(m.themeNames) - 1
+	}
+}
+
+func (m model) updateTheme(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case matches(msg, m.cfg.Keys.Back), matches(msg, m.cfg.Keys.Quit):
+		m.themeMode = false
+		return m, nil
+	case matches(msg, m.cfg.Keys.Up):
+		m.themeCursor--
+		m.clampThemeCursor()
+		return m, nil
+	case matches(msg, m.cfg.Keys.Down):
+		m.themeCursor++
+		m.clampThemeCursor()
+		return m, nil
+	case matches(msg, m.cfg.Keys.Confirm):
+		return m.applySelectedTheme()
 	}
 	return m, nil
 }
@@ -250,6 +316,17 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.beginPrompt()
 	case matches(msg, m.cfg.Keys.OpenConfig):
 		return m, openConfig()
+	case matches(msg, m.cfg.Keys.Theme):
+		m.themeNames, _ = config.ThemeNames(m.cfg)
+		m.themeCursor = 0
+		for i, name := range m.themeNames {
+			if name == m.cfg.Themes.ThemeName {
+				m.themeCursor = i
+				break
+			}
+		}
+		m.themeMode = true
+		return m, nil
 	case matches(msg, m.cfg.Keys.OpenPreview) && m.output != "" && runtime.Resource(m.tab) != runtime.Files:
 		return m, openPreview(m.output, m.previewKind)
 	case matches(msg, m.cfg.Keys.OpenPreview) && runtime.Resource(m.tab) == runtime.Files:
@@ -485,6 +562,13 @@ func (m model) View() tea.View {
 	if m.width == 0 {
 		return tea.NewView("Loading ducky...")
 	}
+	if m.themeMode {
+		content := clampView(m.renderThemeScreen(), m.width, m.height)
+		result := tea.NewView(content)
+		result.AltScreen = true
+		result.MouseMode = tea.MouseModeCellMotion
+		return result
+	}
 	view := m.render()
 	view = clampView(view, m.width, m.height)
 	result := tea.NewView(view)
@@ -502,6 +586,29 @@ func clampView(view string, width, height int) string {
 		lines[i] = ansi.Truncate(line, max(1, width-1), "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m model) renderThemeScreen() string {
+	var b strings.Builder
+	b.WriteString(ui.Header.Render("Themes"))
+	b.WriteString("\n")
+	b.WriteString(ui.Muted.Render("Choose a theme and press Enter. Esc cancels."))
+	b.WriteString("\n\n")
+	for i, name := range m.themeNames {
+		line := "  " + name
+		if name == m.cfg.Themes.ThemeName {
+			line += ui.Muted.Render("  (current)")
+		}
+		if i == m.themeCursor {
+			line = ui.Selector.Render("▶ ") + line[2:]
+			if lipgloss.Width(line) < m.width {
+				line += strings.Repeat(" ", m.width-lipgloss.Width(line))
+			}
+			line = ui.Selected.Render(line)
+		}
+		b.WriteString(line + "\n")
+	}
+	return b.String()
 }
 
 func (m model) render() string {
